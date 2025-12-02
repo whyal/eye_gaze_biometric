@@ -1,487 +1,495 @@
+import 'dart:math' as math;
 import 'dart:io';
-import 'package:eye_gaze_biomarkers/services/gaze_service.dart';
+import 'dart:ui' as ui;
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
-import 'package:google_mlkit_face_mesh_detection/google_mlkit_face_mesh_detection.dart';
-import 'package:flutter/services.dart';
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:permission_handler/permission_handler.dart';
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  // Lock orientation to portrait to prevent math chaos
-  SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
-  runApp(
-    const MaterialApp(
-      home: EyeTrackingScreen(),
-      debugShowCheckedModeBanner: false,
-    ),
-  );
+  runApp(const MaterialApp(home: GazeTrackerApp()));
 }
 
-class EyeTrackingScreen extends StatefulWidget {
-  const EyeTrackingScreen({super.key});
+class GazeTrackerApp extends StatefulWidget {
+  const GazeTrackerApp({super.key});
 
   @override
-  State<EyeTrackingScreen> createState() => _EyeTrackingScreenState();
+  State<GazeTrackerApp> createState() => _GazeTrackerAppState();
 }
 
-class _EyeTrackingScreenState extends State<EyeTrackingScreen> {
-  CameraController? _controller;
-  FaceMeshDetector? _meshDetector;
-  final GazeService _gazeService = GazeService();
-  bool _isBusy = false;
+class _GazeTrackerAppState extends State<GazeTrackerApp> {
+  CameraController? _cameraController;
+  final FaceDetector _faceDetector = FaceDetector(
+    options: FaceDetectorOptions(
+      enableLandmarks: true,
+      enableContours: true,
+      enableClassification: false,
+      enableTracking: true,
+      performanceMode: FaceDetectorMode.fast,
+    ),
+  );
+  bool _isDetecting = false;
+  CameraDescription? _frontCamera;
 
-  // State Machine
-  bool _calibrationMode = false;
-  int _calibIndex = 0;
-  int _framesCollected = 0;
-  final int _framesRequired = 20;
+  // Cursor UI State
+  Offset _cursorPosition = const Offset(0, 0);
 
-  // Calibration Targets
-  final List<Offset> _calibPoints = [
-    Offset(50, 50),
-    Offset(350, 50),
-    Offset(50, 700),
-    Offset(350, 700),
-    Offset(200, 375),
-  ];
+  // --- STABILITY CONFIGURATION ---
+  // Increased slightly to provide better smoothing for the drift effect
+  final int _windowSize = 8;
 
-  Offset _cursorPos = const Offset(0, 0);
-  FaceMesh? _lastMesh;
-  Size? _cameraImageSize;
-  String _debugResolution = "Initializing...";
+  // REMOVED Deadzone for "Drifting" effect.
+  // We want continuous updates now, not stepped movements.
+
+  // --- RAW DATA & SMOOTHING BUFFERS ---
+  final List<double> _historyX = [];
+  final List<double> _historyY = [];
+  double _lastStableX = 0.0;
+  double _lastStableY = 0.0;
+
+  // --- 9-POINT CALIBRATION STATE ---
+  // 0-8: Calibration points. -1: Not calibrating. 9: Finished.
+  int _calibrationStep = 0;
+  List<Offset> _calibrationPoints = []; // Screen coordinates
+  final List<Offset> _recordedEyeVectors = []; // Raw camera vectors
+
+  // Computed Bounds (The "Range of Motion")
+  double _eyeMinX = 0;
+  double _eyeMaxX = 0;
+  double _eyeMinY = 0;
+  double _eyeMaxY = 0;
+
+  // To handle mirroring (Left on screen might be Right on camera)
+  bool _invertX = false;
+  bool _invertY = false;
 
   @override
   void initState() {
     super.initState();
-    _initCamera();
-    _meshDetector = FaceMeshDetector(option: FaceMeshDetectorOptions.faceMesh);
+    _initializeCamera();
   }
 
-  Future<void> _initCamera() async {
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _setupCalibrationPoints();
+  }
+
+  void _setupCalibrationPoints() {
+    final size = MediaQuery.of(context).size;
+    final w = size.width;
+    final h = size.height;
+    final padding = 40.0;
+
+    // 9 Points Grid: Top-Left -> Bottom-Right
+    _calibrationPoints = [
+      Offset(padding, padding), // 0: Top-Left
+      Offset(w / 2, padding), // 1: Top-Center
+      Offset(w - padding, padding), // 2: Top-Right
+      Offset(padding, h / 2), // 3: Mid-Left
+      Offset(w / 2, h / 2), // 4: Center
+      Offset(w - padding, h / 2), // 5: Mid-Right
+      Offset(padding, h - padding), // 6: Bot-Left
+      Offset(w / 2, h - padding), // 7: Bot-Center
+      Offset(w - padding, h - padding), // 8: Bot-Right
+    ];
+  }
+
+  Future<void> _initializeCamera() async {
+    await Permission.camera.request();
     final cameras = await availableCameras();
-    final frontCam = cameras.firstWhere(
-      (c) => c.lensDirection == CameraLensDirection.front,
+    _frontCamera = cameras.firstWhere(
+      (camera) => camera.lensDirection == CameraLensDirection.front,
+      orElse: () => cameras.first,
     );
 
-    _controller = CameraController(
-      frontCam,
-      // SAMSUNG NOTE 8 FIX:
-      // 'veryHigh' forces 1920x1080 (16:9), which matches your camera hardware best.
-      // 'low' or 'medium' often gives 4:3, causing misalignment.
-      ResolutionPreset.veryHigh,
+    _cameraController = CameraController(
+      _frontCamera!,
+      ResolutionPreset.low,
       enableAudio: false,
       imageFormatGroup: Platform.isAndroid
           ? ImageFormatGroup.nv21
           : ImageFormatGroup.bgra8888,
     );
 
-    await _controller!.initialize();
-    if (mounted) {
-      // Read the actual size the camera gave us
-      Size size = _controller!.value.previewSize!;
-      setState(() {
-        _debugResolution = "Cam: ${size.height.toInt()}x${size.width.toInt()}";
-      });
-      _controller!.startImageStream(_processImage);
-    }
+    await _cameraController!.initialize();
+    if (!mounted) return;
+    _cameraController!.startImageStream(_processCameraImage);
+    setState(() {});
   }
 
-  // === UNIFIED SCALING LOGIC (Fixes the Note 8 Mismatch) ===
-  TransformationData _getScaleData(Size imageSize, Size screenSize) {
-    // 1. Standardize Input (Swap X/Y for 270deg rotation)
-    // Note 8 Front camera is usually mounted sideways (270deg)
-    double imageW = imageSize.height;
-    double imageH = imageSize.width;
-
-    // 2. Calculate Scale to COVER the tall screen
-    double scaleX = screenSize.width / imageW;
-    double scaleY = screenSize.height / imageH;
-
-    // Max scale = Zoom to fill height, crop width
-    double scale = scaleX > scaleY ? scaleX : scaleY;
-
-    // 3. Offset to center the video
-    double offsetX = (screenSize.width - imageW * scale) / 2;
-    double offsetY = (screenSize.height - imageH * scale) / 2;
-
-    return TransformationData(scale: scale, offsetX: offsetX, offsetY: offsetY);
-  }
-
-  Offset _transformPoint(
-    FaceMeshPoint p,
-    TransformationData data,
-    Size screenSize,
-  ) {
-    // 1. Swap X/Y (Rotation)
-    double x = p.y.toDouble();
-    double y = p.x.toDouble();
-
-    // 2. Apply Scale & Offset
-    double screenX = x * data.scale + data.offsetX;
-    double screenY = y * data.scale + data.offsetY;
-
-    // 3. Mirror X (Selfie View)
-    screenX = screenSize.width - screenX;
-
-    return Offset(screenX, screenY);
-  }
-
-  Future<void> _processImage(CameraImage image) async {
-    if (_isBusy || _meshDetector == null) return;
-    _isBusy = true;
-    _cameraImageSize = Size(image.width.toDouble(), image.height.toDouble());
-
-    final WriteBuffer allBytes = WriteBuffer();
-    for (final Plane plane in image.planes) allBytes.putUint8List(plane.bytes);
-    final bytes = allBytes.done().buffer.asUint8List();
-
-    final inputImage = InputImage.fromBytes(
-      bytes: bytes,
-      metadata: InputImageMetadata(
-        size: _cameraImageSize!,
-        rotation: InputImageRotation.rotation270deg,
-        format: Platform.isAndroid
-            ? InputImageFormat.nv21
-            : InputImageFormat.bgra8888,
-        bytesPerRow: image.planes[0].bytesPerRow,
-      ),
-    );
+  void _processCameraImage(CameraImage image) async {
+    if (_isDetecting) return;
+    _isDetecting = true;
 
     try {
-      final meshes = await _meshDetector!.processImage(inputImage);
-      if (meshes.isNotEmpty) {
-        final mesh = meshes.first;
-        final size = MediaQuery.of(context).size;
-        setState(() {
-          _lastMesh = mesh;
-        });
+      final inputImage = _inputImageFromCameraImage(image);
+      if (inputImage == null) {
+        _isDetecting = false;
+        return;
+      }
 
-        // Get Scaling Data
-        final data = _getScaleData(_cameraImageSize!, size);
+      final faces = await _faceDetector.processImage(inputImage);
 
-        // --- EXTRACT & TRANSFORM ---
-        final lInner = _transformPoint(
-          mesh.points.firstWhere((p) => p.index == 33),
-          data,
-          size,
-        );
-        final lOuter = _transformPoint(
-          mesh.points.firstWhere((p) => p.index == 133),
-          data,
-          size,
-        );
-        final lTop = _transformPoint(
-          mesh.points.firstWhere((p) => p.index == 159),
-          data,
-          size,
-        );
-        final lBottom = _transformPoint(
-          mesh.points.firstWhere((p) => p.index == 145),
-          data,
-          size,
-        );
+      if (faces.isNotEmpty) {
+        final face = faces.first;
+        final leftEyeLandmark = face.landmarks[FaceLandmarkType.leftEye];
+        final rightEyeLandmark = face.landmarks[FaceLandmarkType.rightEye];
+        final leftEyeContour = face.contours[FaceContourType.leftEye];
+        final rightEyeContour = face.contours[FaceContourType.rightEye];
 
-        final rInner = _transformPoint(
-          mesh.points.firstWhere((p) => p.index == 362),
-          data,
-          size,
-        );
-        final rOuter = _transformPoint(
-          mesh.points.firstWhere((p) => p.index == 263),
-          data,
-          size,
-        );
-        final rTop = _transformPoint(
-          mesh.points.firstWhere((p) => p.index == 386),
-          data,
-          size,
-        );
-        final rBottom = _transformPoint(
-          mesh.points.firstWhere((p) => p.index == 374),
-          data,
-          size,
-        );
+        if (leftEyeLandmark != null &&
+            rightEyeLandmark != null &&
+            leftEyeContour != null &&
+            rightEyeContour != null) {
+          final leftCentroid = _calculateCentroid(leftEyeContour.points);
+          final rightCentroid = _calculateCentroid(rightEyeContour.points);
 
-        Offset lPupil = Offset(
-          (lInner.dx + lOuter.dx + lTop.dx + lBottom.dx) / 4,
-          (lInner.dy + lOuter.dy + lTop.dy + lBottom.dy) / 4,
-        );
-        Offset rPupil = Offset(
-          (rInner.dx + rOuter.dx + rTop.dx + rBottom.dx) / 4,
-          (rInner.dy + rOuter.dy + rTop.dy + rBottom.dy) / 4,
-        );
+          double leftGazeX =
+              leftEyeLandmark.position.x.toDouble() - leftCentroid.dx;
+          double leftGazeY =
+              leftEyeLandmark.position.y.toDouble() - leftCentroid.dy;
+          double rightGazeX =
+              rightEyeLandmark.position.x.toDouble() - rightCentroid.dx;
+          double rightGazeY =
+              rightEyeLandmark.position.y.toDouble() - rightCentroid.dy;
 
-        // --- Gaze Ratios ---
-        double getRatio(double v, double min, double max) {
-          double range = max - min;
-          if (range == 0) return 0.5;
-          return (v - min) / range;
-        }
+          // Average the two eyes
+          double avgGazeX = (leftGazeX + rightGazeX) / 2;
+          double avgGazeY = (leftGazeY + rightGazeY) / 2;
 
-        // Horizontal: Relative to Inner/Outer corners
-        double lx = getRatio(
-          lPupil.dx,
-          lInner.dx < lOuter.dx ? lInner.dx : lOuter.dx,
-          lInner.dx > lOuter.dx ? lInner.dx : lOuter.dx,
-        );
-        double rx = getRatio(
-          rPupil.dx,
-          rInner.dx < rOuter.dx ? rInner.dx : rOuter.dx,
-          rInner.dx > rOuter.dx ? rInner.dx : rOuter.dx,
-        );
-
-        // Vertical: Relative to Top/Bottom lids
-        double ly = getRatio(lPupil.dy, lTop.dy, lBottom.dy);
-        double ry = getRatio(rPupil.dy, rTop.dy, rBottom.dy);
-
-        double avgX = (lx + rx) / 2;
-        double avgY = (ly + ry) / 2;
-
-        if (_calibrationMode) {
-          _framesCollected++;
-          if (_framesCollected > 5) _gazeService.collectSample(avgX, avgY);
-          if (_framesCollected > _framesRequired) {
-            _gazeService.finishCalibrationPoint(_calibIndex);
-            _advanceCalibration();
-          }
-        } else {
-          Offset screenPoint = _gazeService.calculateScreenGaze(
-            avgX,
-            avgY,
-            size,
-          );
-          setState(() {
-            _cursorPos = screenPoint;
-          });
+          _processGazeStability(avgGazeX, avgGazeY);
         }
       }
     } catch (e) {
-      print("Error: $e");
+      debugPrint("Error detecting face: $e");
     } finally {
-      _isBusy = false;
+      _isDetecting = false;
     }
   }
 
-  void _advanceCalibration() {
-    if (_calibIndex < _calibPoints.length - 1) {
+  void _processGazeStability(double rawX, double rawY) {
+    _historyX.add(rawX);
+    _historyY.add(rawY);
+
+    if (_historyX.length > _windowSize) {
+      _historyX.removeAt(0);
+      _historyY.removeAt(0);
+    }
+
+    double smoothedX = _historyX.reduce((a, b) => a + b) / _historyX.length;
+    double smoothedY = _historyY.reduce((a, b) => a + b) / _historyY.length;
+
+    // --- CHANGED: REMOVED DEAD ZONE ---
+    // We update the stable position every single time to allow for "drift".
+    _lastStableX = smoothedX;
+    _lastStableY = smoothedY;
+
+    if (_calibrationStep == 9) {
+      // 9 means calibration finished
+      _updateCursor(_lastStableX, _lastStableY);
+    }
+  }
+
+  void _updateCursor(double stableX, double stableY) {
+    final size = MediaQuery.of(context).size;
+
+    // Normalize X
+    double normX = (stableX - _eyeMinX) / (_eyeMaxX - _eyeMinX);
+    double normY = (stableY - _eyeMinY) / (_eyeMaxY - _eyeMinY);
+
+    normX = normX.clamp(0.0, 1.0);
+    normY = normY.clamp(0.0, 1.0);
+
+    // Map to pixels
+    double screenX = normX * size.width;
+    double screenY = normY * size.height;
+
+    if (mounted) {
       setState(() {
-        _calibIndex++;
-        _framesCollected = 0;
+        _cursorPosition = Offset(screenX, screenY);
+      });
+    }
+  }
+
+  void _nextCalibrationPoint() {
+    _recordedEyeVectors.add(Offset(_lastStableX, _lastStableY));
+
+    if (_calibrationStep < 8) {
+      setState(() {
+        _calibrationStep++;
       });
     } else {
-      setState(() {
-        _calibrationMode = false;
-        _calibIndex = 0;
-      });
+      _finishCalibration();
     }
   }
 
-  void _startCalibration() {
-    _gazeService.reset();
+  void _finishCalibration() {
+    if (_recordedEyeVectors.length != 9) return;
+
+    double avgRawLeftX =
+        (_recordedEyeVectors[0].dx +
+            _recordedEyeVectors[3].dx +
+            _recordedEyeVectors[6].dx) /
+        3;
+    double avgRawRightX =
+        (_recordedEyeVectors[2].dx +
+            _recordedEyeVectors[5].dx +
+            _recordedEyeVectors[8].dx) /
+        3;
+
+    double avgRawTopY =
+        (_recordedEyeVectors[0].dy +
+            _recordedEyeVectors[1].dy +
+            _recordedEyeVectors[2].dy) /
+        3;
+    double avgRawBotY =
+        (_recordedEyeVectors[6].dy +
+            _recordedEyeVectors[7].dy +
+            _recordedEyeVectors[8].dy) /
+        3;
+
     setState(() {
-      _calibrationMode = true;
-      _calibIndex = 0;
-      _framesCollected = 0;
+      _eyeMinX = avgRawLeftX;
+      _eyeMaxX = avgRawRightX;
+      _eyeMinY = avgRawTopY;
+      _eyeMaxY = avgRawBotY;
+      _calibrationStep = 9; // Finished
     });
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text("Calibration Complete!")));
+  }
+
+  void _resetCalibration() {
+    setState(() {
+      _calibrationStep = 0;
+      _recordedEyeVectors.clear();
+    });
+  }
+
+  Offset _calculateCentroid(List<math.Point<int>> points) {
+    if (points.isEmpty) return Offset.zero;
+    double sumX = 0;
+    double sumY = 0;
+    for (var p in points) {
+      sumX += p.x;
+      sumY += p.y;
+    }
+    return Offset(sumX / points.length, sumY / points.length);
+  }
+
+  @override
+  void dispose() {
+    _cameraController?.dispose();
+    _faceDetector.close();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_controller == null || !_controller!.value.isInitialized) {
-      return const Scaffold(
-        backgroundColor: Colors.black,
-        body: Center(
-          child: CircularProgressIndicator(),
-        ), // Show loading spinner
-      );
+    if (_cameraController == null || !_cameraController!.value.isInitialized) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    final size = MediaQuery.of(context).size;
 
-    // 1. Setup default scale (1.0 means no zoom)
-    var scale = 1.0;
-
-    if (_controller != null && _controller!.value.isInitialized) {
-      // Note: In portrait mode, Android swaps width & height.
-      // So 'cameraHeight' is actually the width of the sensor, and vice versa.
-      double cameraW = _controller!.value.previewSize!.height;
-      double cameraH = _controller!.value.previewSize!.width;
-
-      // Compare Screen Dimensions vs Camera Dimensions
-      double scaleX = size.width / cameraW;
-      double scaleY = size.height / cameraH;
-
-      // 3. The "Cover" Logic: Use the LARGER scale
-      // This ensures we zoom in enough to eliminate all black bars
-      scale = scaleX > scaleY ? scaleX : scaleY;
-    }
+    final bool isCalibrating = _calibrationStep >= 0 && _calibrationStep <= 8;
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: Colors.white,
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // 1. SCALED CAMERA PREVIEW
-          Transform.scale(
-            scale: scale,
-            alignment: Alignment
-                .center, // Keep the center of the video in the center of screen
-            child: CameraPreview(_controller!),
-          ),
-
-          // 2. PAINTER (Passes scale data to draw dots correctly on top of scaled video)
-          if (_lastMesh != null && _cameraImageSize != null)
-            CustomPaint(
-              painter: FacePainter(
-                mesh: _lastMesh!,
-                imageSize: _cameraImageSize!,
-                widgetSize: size,
-                scaleData: _getScaleData(_cameraImageSize!, size),
-              ),
+          // 1. Main Interaction Area (Visible after calibration)
+          if (_calibrationStep == 9)
+            Column(
+              children: [
+                Expanded(
+                  child: Row(
+                    children: [
+                      _buildTestTarget(Colors.red.shade100, "Left Area"),
+                      _buildTestTarget(Colors.blue.shade100, "Right Area"),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: Row(
+                    children: [
+                      _buildTestTarget(Colors.green.shade100, "Bottom Area"),
+                    ],
+                  ),
+                ),
+              ],
             ),
 
-          // 3. UI LAYERS
-          if (!_calibrationMode && !_gazeService.isCalibrated)
-            Center(
-              child: ElevatedButton(
-                onPressed: _startCalibration,
-                child: const Text(
-                  "Start Calibration",
-                  style: TextStyle(fontSize: 24),
+          // 2. Calibration UI
+          if (isCalibrating)
+            Positioned(
+              left: _calibrationPoints[_calibrationStep].dx - 30,
+              top: _calibrationPoints[_calibrationStep].dy - 30,
+              child: GestureDetector(
+                onTap: _nextCalibrationPoint,
+                child: Container(
+                  width: 60,
+                  height: 60,
+                  decoration: BoxDecoration(
+                    color: Colors.redAccent,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 4),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Colors.black26,
+                        blurRadius: 10,
+                        spreadRadius: 2,
+                      ),
+                    ],
+                  ),
+                  child: Center(
+                    child: Text(
+                      "${_calibrationStep + 1}",
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),
 
-          if (_calibrationMode)
+          if (isCalibrating)
+            const Positioned(
+              bottom: 50,
+              left: 0,
+              right: 0,
+              child: Text(
+                "Look at the red circle and TAP it.\nKeep your head still.",
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+            ),
+
+          // 3. Reset Button
+          if (_calibrationStep == 9)
             Positioned(
-              left: _calibPoints[_calibIndex].dx - 20,
-              top: _calibPoints[_calibIndex].dy - 20,
-              child: Stack(
-                alignment: Alignment.center,
+              top: 40,
+              right: 20,
+              child: FloatingActionButton.small(
+                onPressed: _resetCalibration,
+                child: const Icon(Icons.refresh),
+              ),
+            ),
+
+          // 4. Debug Data
+          Positioned(
+            bottom: 40,
+            left: 20,
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              color: Colors.black54,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.gps_fixed, color: Colors.red, size: 40),
-                  CircularProgressIndicator(
-                    value: _framesCollected / _framesRequired,
-                    color: Colors.yellow,
-                  ),
+                  Text("Stable X: ${_lastStableX.toStringAsFixed(2)}"),
+                  Text("Stable Y: ${_lastStableY.toStringAsFixed(2)}"),
+                  if (_calibrationStep == 9) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      "Range X: ${_eyeMinX.toStringAsFixed(1)} to ${_eyeMaxX.toStringAsFixed(1)}",
+                    ),
+                    Text(
+                      "Range Y: ${_eyeMinY.toStringAsFixed(1)} to ${_eyeMaxY.toStringAsFixed(1)}",
+                    ),
+                  ],
                 ],
               ),
             ),
+          ),
 
-          if (_gazeService.isCalibrated && !_calibrationMode)
-            Positioned(
-              left: _cursorPos.dx - 15,
-              top: _cursorPos.dy - 15,
-              child: Container(
-                width: 30,
-                height: 30,
-                decoration: BoxDecoration(
-                  color: Colors.blueAccent,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2),
+          // 5. The Cursor (Only show after calibration)
+          // --- CHANGED: Using AnimatedPositioned for drifting effect ---
+          if (_calibrationStep == 9)
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 300), // Drifting lag
+              curve: Curves.easeOut, // Smooth deceleration
+              left: _cursorPosition.dx - 15,
+              top: _cursorPosition.dy - 15,
+              child: IgnorePointer(
+                child: Container(
+                  width: 30,
+                  height: 30,
+                  decoration: BoxDecoration(
+                    color: Colors.purple,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 2),
+                    boxShadow: const [
+                      BoxShadow(color: Colors.black26, blurRadius: 8),
+                    ],
+                  ),
                 ),
               ),
             ),
-
-          Positioned(
-            top: 40,
-            right: 20,
-            child: IconButton(
-              icon: const Icon(Icons.refresh, color: Colors.white),
-              onPressed: _startCalibration,
-            ),
-          ),
-
-          // DEBUG INFO (Check Bottom Left)
-          Positioned(
-            bottom: 20,
-            left: 10,
-            child: Text(
-              "Res: $_debugResolution",
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                backgroundColor: Colors.black54,
-              ),
-            ),
-          ),
         ],
       ),
     );
   }
-}
 
-class TransformationData {
-  final double scale;
-  final double offsetX;
-  final double offsetY;
-  TransformationData({
-    required this.scale,
-    required this.offsetX,
-    required this.offsetY,
-  });
-}
-
-class FacePainter extends CustomPainter {
-  final FaceMesh mesh;
-  final Size imageSize;
-  final Size widgetSize;
-  final TransformationData scaleData;
-
-  FacePainter({
-    required this.mesh,
-    required this.imageSize,
-    required this.widgetSize,
-    required this.scaleData,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    Offset transform(FaceMeshPoint p) {
-      double x = p.y.toDouble();
-      double y = p.x.toDouble();
-
-      double screenX = x * scaleData.scale + scaleData.offsetX;
-      double screenY = y * scaleData.scale + scaleData.offsetY;
-
-      screenX = widgetSize.width - screenX;
-      return Offset(screenX, screenY);
-    }
-
-    final Paint green = Paint()
-      ..color = Colors.greenAccent
-      ..style = PaintingStyle.fill;
-    final Paint red = Paint()
-      ..color = Colors.red
-      ..style = PaintingStyle.fill;
-
-    void drawEye(int inIdx, int outIdx, int topIdx, int botIdx) {
-      final inner = mesh.points.firstWhere((p) => p.index == inIdx);
-      final outer = mesh.points.firstWhere((p) => p.index == outIdx);
-      final top = mesh.points.firstWhere((p) => p.index == topIdx);
-      final bottom = mesh.points.firstWhere((p) => p.index == botIdx);
-
-      canvas.drawCircle(transform(inner), 4, green);
-      canvas.drawCircle(transform(outer), 4, green);
-
-      double avgX =
-          (transform(inner).dx +
-              transform(outer).dx +
-              transform(top).dx +
-              transform(bottom).dx) /
-          4;
-      double avgY =
-          (transform(inner).dy +
-              transform(outer).dy +
-              transform(top).dy +
-              transform(bottom).dy) /
-          4;
-      canvas.drawCircle(Offset(avgX, avgY), 5, red);
-    }
-
-    drawEye(33, 133, 159, 145);
-    drawEye(362, 263, 386, 374);
+  Widget _buildTestTarget(Color color, String text) {
+    return Expanded(
+      child: Container(
+        margin: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Center(
+          child: Text(
+            text,
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              color: Colors.black54,
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+  InputImage? _inputImageFromCameraImage(CameraImage image) {
+    if (_cameraController == null) return null;
+    final camera = _frontCamera;
+    final sensorOrientation = camera!.sensorOrientation;
+    InputImageRotation? rotation;
+    if (Platform.isAndroid) {
+      var rotationCompensation = _orientations[0]!;
+      if (sensorOrientation == 270) {
+        rotationCompensation = 270;
+      }
+      rotation = InputImageRotationValue.fromRawValue(rotationCompensation);
+    } else {
+      rotation = InputImageRotationValue.fromRawValue(sensorOrientation);
+    }
+    if (rotation == null) return null;
+    final format = InputImageFormatValue.fromRawValue(image.format.raw);
+    if (format == null) return null;
+    if (image.planes.isEmpty) return null;
+    final WriteBuffer allBytes = WriteBuffer();
+    for (final Plane plane in image.planes) {
+      allBytes.putUint8List(plane.bytes);
+    }
+    final bytes = allBytes.done().buffer.asUint8List();
+    final metadata = InputImageMetadata(
+      size: Size(image.width.toDouble(), image.height.toDouble()),
+      rotation: rotation,
+      format: format,
+      bytesPerRow: image.planes[0].bytesPerRow,
+    );
+    return InputImage.fromBytes(bytes: bytes, metadata: metadata);
+  }
+
+  static const _orientations = {0: 0, 90: 90, 180: 180, 270: 270};
 }

@@ -6,7 +6,7 @@ import 'package:eye_gaze_biomarkers/main.dart';
 void main() {
   testWidgets('App smoke test', (WidgetTester tester) async {
     // 1. Change MyApp to GazeTrackerApp
-    await tester.pumpWidget(const EyeTrackingScreen());
+    await tester.pumpWidget(const GazeTrackerApp());
 
     // 2. Since we removed the counter, we simply check if the
     // MaterialApp widget is present to confirm the app started.
