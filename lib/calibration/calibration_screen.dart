@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import '../eye_tracking/eye_tracking_channel.dart';
+import '../logging/gaze_jsonl_logger.dart';
 import 'calibration_model.dart';
 
 class CalibrationScreen extends StatefulWidget {
@@ -31,10 +32,9 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   ];
 
   static const int _requiredDwellMs = 1000;
-  static const double _radiusPx = 80;
   static const double _maxStdDev = 0.03;
 
-  StreamSubscription<Offset>? _gazeSub;
+  StreamSubscription<EyeTrackingSample>? _gazeSub;
   final List<CalibrationSample> _samples = [];
   int _index = 0;
   int _dwellStartMs = -1;
@@ -49,9 +49,10 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   @override
   void initState() {
     super.initState();
-    _gazeSub = EyeTrackingChannel.gazeStream.listen((gaze) {
+    _gazeSub = EyeTrackingChannel.sampleStream.listen((sample) {
       if (!mounted || _index >= _points.length || !_started) return;
-      _lastGaze = gaze;
+      _lastGaze = sample.gazeNorm;
+      _logCalibrationFrame(sample);
       _updateFixation();
     });
   }
@@ -70,10 +71,6 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     final gazeNorm = Offset(
       _lastGaze!.dx.clamp(0.0, 1.0),
       _lastGaze!.dy.clamp(0.0, 1.0),
-    );
-    final gazePx = Offset(
-      gazeNorm.dx * _lastSize.width,
-      gazeNorm.dy * _lastSize.height,
     );
 
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -102,17 +99,43 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
         _samples.add(
           CalibrationSample(raw: avgGaze, target: targetNorm),
         );
+        GazeJsonlLogger.instance.logEvent(
+          event: 'calibration_point_end',
+          payload: {
+            'task': 'calibration',
+            'trial': _index + 1,
+            'status': 'accepted',
+          },
+        );
 
         _index += 1;
         _dwellStartMs = -1;
 
         if (_index >= _points.length) {
+          GazeJsonlLogger.instance.logEvent(
+            event: 'calibration_end',
+            payload: {
+              'task': 'calibration',
+              'points_collected': _samples.length,
+            },
+          );
           final model = CalibrationModel.fromSamples(_samples);
           widget.onComplete(model);
+        } else {
+          _markTargetOn(_index);
         }
       } else {
         _dwellStartMs = -1;
         _statusText = 'Hold still (retry)';
+        GazeJsonlLogger.instance.logEvent(
+          event: 'calibration_point_end',
+          payload: {
+            'task': 'calibration',
+            'trial': _index + 1,
+            'status': 'retry',
+            'std_dev': stdDev,
+          },
+        );
       }
     }
 
@@ -144,7 +167,6 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
       builder: (_, constraints) {
         _lastSize = constraints.biggest;
         final alignment = _points[_index];
-        final targetPx = alignment.alongSize(_lastSize);
 
         return Scaffold(
           backgroundColor: Colors.black,
@@ -163,6 +185,14 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
                       _gazeSamples.clear();
                       _statusText = 'Hold still';
                     });
+                    GazeJsonlLogger.instance.logEvent(
+                      event: 'calibration_start',
+                      payload: {
+                        'task': 'calibration',
+                        'points_total': _points.length,
+                      },
+                    );
+                    _markTargetOn(0);
                   },
                 ),
               Align(
@@ -196,6 +226,35 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
           ),
         );
       },
+    );
+  }
+}
+
+extension on _CalibrationScreenState {
+  void _markTargetOn(int pointIndex) {
+    final target = _targetForIndex(pointIndex);
+    GazeJsonlLogger.instance.logEvent(
+      event: 'calibration_point_start',
+      payload: {
+        'task': 'calibration',
+        'trial': pointIndex + 1,
+        'tx': target.dx,
+        'ty': target.dy,
+      },
+    );
+  }
+
+  Offset _targetForIndex(int pointIndex) {
+    if (_lastSize.isEmpty) return const Offset(0.5, 0.5);
+    final alignment = _CalibrationScreenState._points[pointIndex];
+    final px = alignment.alongSize(_lastSize);
+    return Offset(px.dx / _lastSize.width, px.dy / _lastSize.height);
+  }
+
+  void _logCalibrationFrame(EyeTrackingSample sample) {
+    GazeJsonlLogger.instance.logFrame(
+      sample: sample,
+      isCalibration: true,
     );
   }
 }
@@ -295,7 +354,7 @@ class _CalibrationIntro extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: Colors.black.withOpacity(0.85),
+      color: Colors.black.withValues(alpha: 0.85),
       alignment: Alignment.center,
       child: Padding(
         padding: const EdgeInsets.all(24),

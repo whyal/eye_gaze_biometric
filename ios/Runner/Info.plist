@@ -51,10 +51,14 @@
     
     <key>NSLocalNetworkUsageDescription</key>
     <string>Allow Flutter to connect to the Dart VM for debugging and Hot Reload.</string>
-    <key>NSBonjourServices</key>
-    <array>
-        <string>_dartobservatory._tcp</string>
-    </array>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_dartobservatory._tcp</string>
+	</array>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
     
 </dict>
 </plist>
