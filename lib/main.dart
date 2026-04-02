@@ -381,20 +381,27 @@ class _GazeDemoScreenState extends State<GazeDemoScreen> {
                   size: size,
                 ),
               ),
-              Positioned(
-                right: 12,
-                top: 12,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.white24,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
+              SafeArea(
+                child: Align(
+                  alignment: Alignment.bottomCenter,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: SizedBox(
+                      width: 220,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white24,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 14,
+                          ),
+                        ),
+                        onPressed: widget.onRedoCalibration,
+                        child: const Text('Recalibrate'),
+                      ),
                     ),
                   ),
-                  onPressed: widget.onRedoCalibration,
-                  child: const Text('Recalibrate'),
                 ),
               ),
               if (_pursuitInstruction)

@@ -19,20 +19,22 @@ class CalibrationScreen extends StatefulWidget {
 }
 
 class _CalibrationScreenState extends State<CalibrationScreen> {
-  static const _points = [
-    Alignment.topLeft,
-    Alignment.topCenter,
-    Alignment.topRight,
-    Alignment.centerLeft,
-    Alignment.center,
-    Alignment.centerRight,
-    Alignment.bottomLeft,
-    Alignment.bottomCenter,
-    Alignment.bottomRight,
+  static const List<Offset> _points = [
+    Offset(0, 0),
+    Offset(0.5, 0),
+    Offset(1, 0),
+    Offset(0, 0.5),
+    Offset(0.5, 0.5),
+    Offset(1, 0.5),
+    Offset(0, 1),
+    Offset(0.5, 1),
+    Offset(1, 1),
   ];
 
   static const int _requiredDwellMs = 1000;
   static const double _maxStdDev = 0.03;
+  static const double _targetSize = 50;
+  static const double _targetEdgeInset = 20;
 
   StreamSubscription<EyeTrackingSample>? _gazeSub;
   final List<CalibrationSample> _samples = [];
@@ -45,6 +47,7 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   final List<Offset> _gazeSamples = [];
   String _statusText = 'Hold still';
   bool _started = false;
+  Rect _targetBounds = Rect.zero;
 
   @override
   void initState() {
@@ -66,8 +69,7 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
   void _updateFixation() {
     if (_lastGaze == null || _lastSize.isEmpty) return;
 
-    final alignment = _points[_index];
-    final targetPx = alignment.alongSize(_lastSize);
+    final targetPx = _targetCenterForIndex(_index);
     final gazeNorm = Offset(
       _lastGaze!.dx.clamp(0.0, 1.0),
       _lastGaze!.dy.clamp(0.0, 1.0),
@@ -166,7 +168,8 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     return LayoutBuilder(
       builder: (_, constraints) {
         _lastSize = constraints.biggest;
-        final alignment = _points[_index];
+        _targetBounds = _computeTargetBounds(context, _lastSize);
+        final targetCenter = _targetCenterForIndex(_index);
 
         return Scaffold(
           backgroundColor: Colors.black,
@@ -195,13 +198,14 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
                     _markTargetOn(0);
                   },
                 ),
-              Align(
-                alignment: alignment,
+              Positioned(
+                left: targetCenter.dx - (_targetSize / 2),
+                top: targetCenter.dy - (_targetSize / 2),
                 child: CustomPaint(
                   painter: _RingPainter(_fixationProgress),
-                  child: const SizedBox(
-                    width: 50,
-                    height: 50,
+                  child: SizedBox(
+                    width: _targetSize,
+                    height: _targetSize,
                     child: Center(
                       child: CircleAvatar(
                         radius: 6,
@@ -246,9 +250,44 @@ extension on _CalibrationScreenState {
 
   Offset _targetForIndex(int pointIndex) {
     if (_lastSize.isEmpty) return const Offset(0.5, 0.5);
-    final alignment = _CalibrationScreenState._points[pointIndex];
-    final px = alignment.alongSize(_lastSize);
+    final px = _targetCenterForIndex(pointIndex);
     return Offset(px.dx / _lastSize.width, px.dy / _lastSize.height);
+  }
+
+  Offset _targetCenterForIndex(int pointIndex) {
+    final point = _CalibrationScreenState._points[pointIndex];
+    final dx = _targetBounds.left + (_targetBounds.width * point.dx);
+    final dy = _targetBounds.top + (_targetBounds.height * point.dy);
+    return Offset(dx, dy);
+  }
+
+  Rect _computeTargetBounds(BuildContext context, Size size) {
+    final padding = MediaQuery.of(context).padding;
+    final halfTarget = _CalibrationScreenState._targetSize / 2;
+    final left =
+        padding.left + halfTarget + _CalibrationScreenState._targetEdgeInset;
+    final top =
+        padding.top + halfTarget + _CalibrationScreenState._targetEdgeInset;
+    final right = size.width -
+        padding.right -
+        halfTarget -
+        _CalibrationScreenState._targetEdgeInset;
+    final bottom =
+        size.height -
+        padding.bottom -
+        halfTarget -
+        _CalibrationScreenState._targetEdgeInset;
+
+    if (right <= left || bottom <= top) {
+      return Rect.fromLTWH(
+        halfTarget,
+        halfTarget,
+        max(0, size.width - _CalibrationScreenState._targetSize),
+        max(0, size.height - _CalibrationScreenState._targetSize),
+      );
+    }
+
+    return Rect.fromLTRB(left, top, right, bottom);
   }
 
   void _logCalibrationFrame(EyeTrackingSample sample) {
