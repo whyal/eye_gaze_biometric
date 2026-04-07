@@ -256,35 +256,6 @@ class _GazeDemoScreenState extends State<GazeDemoScreen> {
         'voltage so it can be used safely in homes and offices. Today, many '
         'cities use “smart grids” that help detect outages quickly and '
         'balance supply and demand.',
-    'Transportation systems also play a major role in daily life. Traffic '
-        'lights are programmed to reduce congestion and improve safety. '
-        'Public buses and trains follow schedules designed to move large '
-        'numbers of people efficiently. Maintenance teams regularly inspect '
-        'roads, bridges, and rail tracks. Even small problems in one part of '
-        'the transportation system can cause delays across the city.\n\n'
-        'Communication networks connect everything together. Fiber-optic '
-        'cables carry large amounts of information very quickly. Wireless '
-        'towers and routers help people access the internet and make phone '
-        'calls. As more devices connect to the network, managing data traffic '
-        'becomes more complex. Reliable communication is especially important '
-        'during emergencies.',
-    'Cities also rely on delivery systems to bring food, medicine, and other '
-        'goods to stores and homes. Distribution centers organize shipments '
-        'using computer software. Delivery drivers follow routes planned to '
-        'save time and fuel. Temperature-controlled trucks help keep food '
-        'fresh during transport.\n\n'
-        'All of these systems are connected. If electricity fails, water '
-        'treatment plants may stop working. If roads are blocked, deliveries '
-        'may be delayed. Because everything is linked, city planners focus on '
-        'improving reliability and preparing for unexpected problems.\n\n'
-        'Although these systems are often invisible, they are carefully '
-        'managed every day. Engineers, technicians, and planners monitor '
-        'equipment, repair damage, and update technology. Their work ensures '
-        'that when someone turns on a tap, switches on a light, or takes a '
-        'bus, everything functions as expected.\n\n'
-        'The smooth operation of a city depends on constant planning and '
-        'teamwork. Even though most people do not see these systems, they '
-        'play a crucial role in modern life.',
   ];
 
   static const List<_FixTarget> _fixationPattern = [
@@ -416,6 +387,7 @@ class _GazeDemoScreenState extends State<GazeDemoScreen> {
               if (_readingRunning && _readingPageIndex >= 0)
                 _ReadingPageCard(
                   pageNumber: _readingPageIndex + 1,
+                  totalPages: _readingPages.length,
                   text: _readingPages[_readingPageIndex],
                 ),
               if (_allActivitiesCompleted)
@@ -726,10 +698,12 @@ class _GazeDot extends StatelessWidget {
 
 class _ReadingPageCard extends StatelessWidget {
   final int pageNumber;
+  final int totalPages;
   final String text;
 
   const _ReadingPageCard({
     required this.pageNumber,
+    required this.totalPages,
     required this.text,
   });
 
@@ -749,7 +723,7 @@ class _ReadingPageCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Reading Page $pageNumber / 3',
+                'Reading Page $pageNumber / $totalPages',
                 style: const TextStyle(
                   color: Colors.black54,
                   fontSize: 14,
