@@ -230,7 +230,7 @@ class GazeDemoScreen extends StatefulWidget {
 class _GazeDemoScreenState extends State<GazeDemoScreen> {
   static const _settleMs = 500;
   static const _recordWindowMs = 1200;
-  static const _fixationRounds = 2;
+  static const _fixationRounds = 1;
   static const _pursuitInstructionMs = 2000;
   static const _pursuitMotionMs = 28000;
   static const _pursuitPeriodMs = 4000;
