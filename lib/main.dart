@@ -231,6 +231,7 @@ class _GazeDemoScreenState extends State<GazeDemoScreen> {
   static const _settleMs = 500;
   static const _recordWindowMs = 1200;
   static const _fixationRounds = 1;
+  static const _interTaskBreakMs = 5000;
   static const _pursuitInstructionMs = 2000;
   static const _pursuitMotionMs = 28000;
   static const _pursuitPeriodMs = 4000;
@@ -277,11 +278,15 @@ class _GazeDemoScreenState extends State<GazeDemoScreen> {
   bool _pursuitInstruction = false;
   bool _pursuitRunning = false;
   bool _readingRunning = false;
+  bool _interTaskBreakRunning = false;
   bool _allActivitiesCompleted = false;
   bool _completionNotified = false;
   int _currentRound = 0;
   int _currentTrial = -1;
   int _readingPageIndex = -1;
+  int _interTaskBreakRemaining = 0;
+  double _interTaskBreakProgress = 0;
+  String _nextTaskLabel = '';
   Offset? _pursuitDotNorm;
   bool _disposed = false;
   Timer? _pursuitTicker;
@@ -384,6 +389,12 @@ class _GazeDemoScreenState extends State<GazeDemoScreen> {
                     textAlign: TextAlign.center,
                   ),
                 ),
+              if (_interTaskBreakRunning)
+                _InterTaskBreakOverlay(
+                  nextTaskLabel: _nextTaskLabel,
+                  secondsRemaining: _interTaskBreakRemaining,
+                  progress: _interTaskBreakProgress,
+                ),
               if (_readingRunning && _readingPageIndex >= 0)
                 _ReadingPageCard(
                   pageNumber: _readingPageIndex + 1,
@@ -436,7 +447,11 @@ class _GazeDemoScreenState extends State<GazeDemoScreen> {
     _sequenceStarted = true;
     await _runFixationRounds();
     if (_disposed) return;
+    await _runInterTaskBreak('Pursuit');
+    if (_disposed) return;
     await _runPursuitTask();
+    if (_disposed) return;
+    await _runInterTaskBreak('Reading');
     if (_disposed) return;
     await _runReadingTask();
     if (_disposed) return;
@@ -628,6 +643,37 @@ class _GazeDemoScreenState extends State<GazeDemoScreen> {
     });
   }
 
+  Future<void> _runInterTaskBreak(String nextTaskLabel) async {
+    if (_disposed) return;
+
+    setState(() {
+      _interTaskBreakRunning = true;
+      _nextTaskLabel = nextTaskLabel;
+      _interTaskBreakRemaining = (_interTaskBreakMs / 1000).ceil();
+      _interTaskBreakProgress = 0;
+    });
+
+    final stopwatch = Stopwatch()..start();
+    while (!_disposed && stopwatch.elapsedMilliseconds < _interTaskBreakMs) {
+      final elapsedMs = stopwatch.elapsedMilliseconds;
+      final remainingMs = _interTaskBreakMs - elapsedMs;
+      setState(() {
+        _interTaskBreakRemaining = (remainingMs / 1000).ceil();
+        _interTaskBreakProgress =
+            elapsedMs.clamp(0, _interTaskBreakMs) / _interTaskBreakMs;
+      });
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
+
+    if (_disposed) return;
+    setState(() {
+      _interTaskBreakRunning = false;
+      _interTaskBreakRemaining = 0;
+      _interTaskBreakProgress = 0;
+      _nextTaskLabel = '';
+    });
+  }
+
   Offset _computePursuitDotNorm(int elapsedMs) {
     final turn = (elapsedMs % _pursuitPeriodMs) / _pursuitPeriodMs;
     final angle = -math.pi / 2 + (2 * math.pi * turn);
@@ -738,6 +784,79 @@ class _ReadingPageCard extends StatelessWidget {
                     color: Colors.black87,
                     fontSize: 20,
                     height: 1.45,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _InterTaskBreakOverlay extends StatelessWidget {
+  final String nextTaskLabel;
+  final int secondsRemaining;
+  final double progress;
+
+  const _InterTaskBreakOverlay({
+    required this.nextTaskLabel,
+    required this.secondsRemaining,
+    required this.progress,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 460),
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+          decoration: BoxDecoration(
+            color: Colors.black87,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white24),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Break',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 30,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Next task starts in $secondsRemaining s',
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 18,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                nextTaskLabel,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 20),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 24,
+                  backgroundColor: Colors.white12,
+                  valueColor: const AlwaysStoppedAnimation<Color>(
+                    Colors.greenAccent,
                   ),
                 ),
               ),
