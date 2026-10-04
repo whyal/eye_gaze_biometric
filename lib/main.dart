@@ -239,25 +239,15 @@ class _GazeDemoScreenState extends State<GazeDemoScreen> {
   static const _pursuitCenterNorm = Offset(0.5, 0.5);
   static const _readingPageMs = 20000;
   static const List<String> _readingPages = [
-    'Cities may seem busy and unpredictable, but behind the scenes they '
-        'depend on many organized systems. These systems work quietly every '
-        'day to make sure that people can live comfortably. Most people only '
-        'notice them when something stops working.\n\n'
-        'One important system is water supply. Clean water travels through a '
-        'large network of underground pipes. Pumping stations move the water '
-        'from treatment plants to homes and buildings. Engineers monitor the '
-        'system to make sure water pressure stays stable. At the same time, '
-        'wastewater from sinks and toilets must be collected and cleaned '
-        'before it is released safely. This process uses filters, chemicals, '
-        'and helpful bacteria to remove waste.\n\n'
-        'Electricity is another essential service. Power plants generate '
-        'electricity using different energy sources, such as natural gas, '
-        'wind, or solar power. The electricity travels through transmission '
-        'lines and then into local neighborhoods. Substations reduce the '
-        'voltage so it can be used safely in homes and offices. Today, many '
-        'cities use “smart grids” that help detect outages quickly and '
-        'balance supply and demand.',
+    'Morning light filtered through the quiet cafe as the warm aroma of '
+        'roasted coffee beans filled the air. A barista carefully poured '
+        'steamed milk, sketching a delicate leaf on top of a latte. '
+        'Regular customers settled into their favorite window seats with '
+        'books and journals.\n\n'
+        'Outside, gentle footsteps echoed down the sidewalk as the town '
+        'slowly began to awaken for the day.',
   ];
+
 
   static const List<_FixTarget> _fixationPattern = [
     _FixTarget('C', Offset(0.5, 0.5)),
