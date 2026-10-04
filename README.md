@@ -1,9 +1,9 @@
 # An Eye-gaze behavioural biometric study
 
-A pilot study to find out if consumer-grade smartphones can extract reliable behavioural eye-gaze data as a form of authentication.
+A pilot study on the capability of consumer-grade smartphones to extract reliable behavioural eye-gaze data for alternate method of authentication.
 
 ## Methodology
-The table below consists of the tasks carried out for this study.
+The table below consists of the experimental tasks used for this research.
 
 |Sequence|Task|Purpose|
 |---|---|---|
