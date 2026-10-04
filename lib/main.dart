@@ -752,8 +752,9 @@ class _ReadingPageCard extends StatelessWidget {
           constraints: const BoxConstraints(maxWidth: 820),
           padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 24),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: const Color(0xFF1E1E1E),
             borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white24),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -761,9 +762,10 @@ class _ReadingPageCard extends StatelessWidget {
               Text(
                 'Reading Page $pageNumber / $totalPages',
                 style: const TextStyle(
-                  color: Colors.black54,
+                  color: Colors.white60,
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
+                  letterSpacing: 0.5,
                 ),
               ),
               const SizedBox(height: 12),
@@ -771,9 +773,10 @@ class _ReadingPageCard extends StatelessWidget {
                 child: Text(
                   text,
                   style: const TextStyle(
-                    color: Colors.black87,
+                    color: Color(0xFFE0E0E0),
                     fontSize: 20,
-                    height: 1.45,
+                    height: 1.65,
+                    letterSpacing: 0.2,
                   ),
                 ),
               ),
