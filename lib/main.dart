@@ -237,6 +237,7 @@ class _GazeDemoScreenState extends State<GazeDemoScreen> {
   static const _pursuitPeriodMs = 4000;
   static const _pursuitRadiusNorm = 0.28;
   static const _pursuitCenterNorm = Offset(0.5, 0.5);
+  static const _showGazeCursor = false;
   static const _readingPageTimeoutMs = 120000;
   static const List<String> _readingPages = [
     'Morning light filtered through the quiet cafe as the warm aroma of '
@@ -341,7 +342,7 @@ class _GazeDemoScreenState extends State<GazeDemoScreen> {
                   target: _pursuitDotNorm!,
                   size: size,
                 ),
-              if (mapped != null)
+              if (_showGazeCursor && mapped != null)
                 Positioned(
                   left: mapped.dx - 8,
                   top: mapped.dy - 8,
@@ -939,6 +940,15 @@ class _InterTaskBreakOverlay extends StatelessWidget {
                   color: Colors.white60,
                   fontSize: 14,
                   fontStyle: FontStyle.italic,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Keep holding your phone at a steady distance.',
+                style: TextStyle(
+                  color: Colors.white38,
+                  fontSize: 12,
                 ),
                 textAlign: TextAlign.center,
               ),
