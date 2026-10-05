@@ -231,9 +231,9 @@ class _GazeDemoScreenState extends State<GazeDemoScreen> {
   static const _settleMs = 500;
   static const _recordWindowMs = 1200;
   static const _fixationRounds = 1;
-  static const _interTaskBreakMs = 5000;
+  static const _interTaskBreakMs = 12000;
   static const _pursuitInstructionMs = 2000;
-  static const _pursuitMotionMs = 28000;
+  static const _pursuitMotionMs = 16000;
   static const _pursuitPeriodMs = 4000;
   static const _pursuitRadiusNorm = 0.28;
   static const _pursuitCenterNorm = Offset(0.5, 0.5);
@@ -669,6 +669,14 @@ class _GazeDemoScreenState extends State<GazeDemoScreen> {
       _interTaskBreakProgress = 0;
     });
 
+    GazeJsonlLogger.instance.logEvent(
+      event: 'break_start',
+      payload: {
+        'next_task': nextTaskLabel.toLowerCase(),
+        'duration_sec': _interTaskBreakMs / 1000.0,
+      },
+    );
+
     final stopwatch = Stopwatch()..start();
     while (!_disposed && stopwatch.elapsedMilliseconds < _interTaskBreakMs) {
       final elapsedMs = stopwatch.elapsedMilliseconds;
@@ -682,6 +690,12 @@ class _GazeDemoScreenState extends State<GazeDemoScreen> {
     }
 
     if (_disposed) return;
+
+    GazeJsonlLogger.instance.logEvent(
+      event: 'break_end',
+      payload: {'next_task': nextTaskLabel.toLowerCase()},
+    );
+
     setState(() {
       _interTaskBreakRunning = false;
       _interTaskBreakRemaining = 0;
@@ -917,6 +931,16 @@ class _InterTaskBreakOverlay extends StatelessWidget {
                   fontSize: 22,
                   fontWeight: FontWeight.w600,
                 ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Rest your eyes and blink naturally.',
+                style: TextStyle(
+                  color: Colors.white60,
+                  fontSize: 14,
+                  fontStyle: FontStyle.italic,
+                ),
+                textAlign: TextAlign.center,
               ),
               const SizedBox(height: 20),
               ClipRRect(
