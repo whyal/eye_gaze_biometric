@@ -237,7 +237,7 @@ class _GazeDemoScreenState extends State<GazeDemoScreen> {
   static const _pursuitPeriodMs = 4000;
   static const _pursuitRadiusNorm = 0.28;
   static const _pursuitCenterNorm = Offset(0.5, 0.5);
-  static const _readingPageMs = 20000;
+  static const _readingPageTimeoutMs = 120000;
   static const List<String> _readingPages = [
     'Morning light filtered through the quiet cafe as the warm aroma of '
         'roasted coffee beans filled the air. A barista carefully poured '
@@ -247,7 +247,6 @@ class _GazeDemoScreenState extends State<GazeDemoScreen> {
         'Outside, gentle footsteps echoed down the sidewalk as the town '
         'slowly began to awaken for the day.',
   ];
-
 
   static const List<_FixTarget> _fixationPattern = [
     _FixTarget('C', Offset(0.5, 0.5)),
@@ -282,6 +281,7 @@ class _GazeDemoScreenState extends State<GazeDemoScreen> {
   Timer? _pursuitTicker;
   int _pursuitMoveStartMs = -1;
   StreamSubscription<EyeTrackingSample>? _gazeSub;
+  Completer<void>? _readingCompleter;
 
   @override
   void initState() {
@@ -309,7 +309,16 @@ class _GazeDemoScreenState extends State<GazeDemoScreen> {
     _disposed = true;
     _pursuitTicker?.cancel();
     _gazeSub?.cancel();
+    if (_readingCompleter != null && !_readingCompleter!.isCompleted) {
+      _readingCompleter!.complete();
+    }
     super.dispose();
+  }
+
+  void _onReadingPageDone() {
+    if (_readingCompleter != null && !_readingCompleter!.isCompleted) {
+      _readingCompleter!.complete();
+    }
   }
 
   @override
@@ -390,6 +399,7 @@ class _GazeDemoScreenState extends State<GazeDemoScreen> {
                   pageNumber: _readingPageIndex + 1,
                   totalPages: _readingPages.length,
                   text: _readingPages[_readingPageIndex],
+                  onDone: _onReadingPageDone,
                 ),
               if (_allActivitiesCompleted)
                 const Align(
@@ -607,7 +617,7 @@ class _GazeDemoScreenState extends State<GazeDemoScreen> {
     if (_disposed) return;
     GazeJsonlLogger.instance.logEvent(
       event: 'reading_start',
-      payload: {'task': 'reading'},
+      payload: {'task': 'reading', 'mode': 'self_paced'},
     );
     setState(() {
       _readingRunning = true;
@@ -616,11 +626,27 @@ class _GazeDemoScreenState extends State<GazeDemoScreen> {
     for (var i = 0; i < _readingPages.length; i++) {
       if (_disposed) return;
       setState(() => _readingPageIndex = i);
+      final pageStartMs = DateTime.now().millisecondsSinceEpoch;
       GazeJsonlLogger.instance.logEvent(
         event: 'reading_page_start',
         payload: {'page': i + 1},
       );
-      await Future.delayed(const Duration(milliseconds: _readingPageMs));
+
+      _readingCompleter = Completer<void>();
+      await Future.any([
+        _readingCompleter!.future,
+        Future.delayed(const Duration(milliseconds: _readingPageTimeoutMs)),
+      ]);
+
+      if (_disposed) return;
+      final elapsedMs = DateTime.now().millisecondsSinceEpoch - pageStartMs;
+      GazeJsonlLogger.instance.logEvent(
+        event: 'reading_page_end',
+        payload: {
+          'page': i + 1,
+          'duration_ms': elapsedMs,
+        },
+      );
     }
     if (_disposed) return;
     GazeJsonlLogger.instance.logEvent(
@@ -736,11 +762,13 @@ class _ReadingPageCard extends StatelessWidget {
   final int pageNumber;
   final int totalPages;
   final String text;
+  final VoidCallback onDone;
 
   const _ReadingPageCard({
     required this.pageNumber,
     required this.totalPages,
     required this.text,
+    required this.onDone,
   });
 
   @override
@@ -759,24 +787,73 @@ class _ReadingPageCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'Reading Page $pageNumber / $totalPages',
-                style: const TextStyle(
-                  color: Colors.white60,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.5,
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Reading Page $pageNumber / $totalPages',
+                    style: const TextStyle(
+                      color: Colors.white60,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                  const Text(
+                    'Self-paced',
+                    style: TextStyle(
+                      color: Colors.white38,
+                      fontSize: 12,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Text(
+                    text,
+                    style: const TextStyle(
+                      color: Color(0xFFE0E0E0),
+                      fontSize: 20,
+                      height: 1.65,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
                 ),
               ),
-              const SizedBox(height: 12),
-              Expanded(
-                child: Text(
-                  text,
-                  style: const TextStyle(
-                    color: Color(0xFFE0E0E0),
-                    fontSize: 20,
-                    height: 1.65,
-                    letterSpacing: 0.2,
+              const SizedBox(height: 16),
+              Align(
+                alignment: Alignment.centerRight,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.white12,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 12,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      side: const BorderSide(color: Colors.white24),
+                    ),
+                  ),
+                  onPressed: onDone,
+                  icon: Icon(
+                    pageNumber == totalPages
+                        ? Icons.check_circle_outline
+                        : Icons.arrow_forward,
+                    size: 18,
+                    color: Colors.greenAccent,
+                  ),
+                  label: Text(
+                    pageNumber == totalPages ? 'Finish Reading' : 'Next Page',
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ),
